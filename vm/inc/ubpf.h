@@ -1,3 +1,6 @@
+// Copyright (c) 2015 Big Switch Networks, Inc
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * Copyright 2015 Big Switch Networks, Inc
  *
@@ -263,6 +266,33 @@ ubpf_get_registers(const struct ubpf_vm* vm);
  */
 int
 ubpf_set_pointer_secret(struct ubpf_vm* vm, uint64_t secret);
+
+typedef uint64_t (*ubpf_data_relocation)(
+    void* user_context, const uint8_t* data, uint64_t data_size, const char* symbol_name);
+
+/**
+ * @brief Set a relocation function for the VM.
+ *
+ * @param[in] vm The VM to set the relocation function for.
+ * @param[in] relocation The relocation function.
+ * @return int The value to insert into the BPF program.
+ */
+int
+ubpf_register_data_relocation(struct ubpf_vm* vm, void* user_context, ubpf_data_relocation relocation);
+
+typedef bool (*ubpf_bounds_check)(void* context, uint64_t addr, uint64_t size);
+
+/**
+ * @brief Set a bounds check function for the VM.
+ *
+ * @param[in] vm The VM to set the bounds check function for.
+ * @param[in] user_context The user context to pass to the bounds check function.
+ * @param[in] bounds_check The bounds check function.
+ * @retval 0 Success.
+ * @retval -1 Failure.
+ */
+int
+ubpf_register_data_bounds_check(struct ubpf_vm* vm, void* user_context, ubpf_bounds_check bounds_check);
 
 #ifdef __cplusplus
 }

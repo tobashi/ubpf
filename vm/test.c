@@ -1,3 +1,6 @@
+// Copyright (c) 2015 Big Switch Networks, Inc
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * Copyright 2015 Big Switch Networks, Inc
  * Copyright 2017 Google Inc.
@@ -29,6 +32,8 @@
 #include <math.h>
 #include "ubpf.h"
 
+#include "../bpf/bpf.h"
+
 #if defined(UBPF_HAS_ELF_H)
 #include <elf.h>
 #endif
@@ -53,6 +58,73 @@ usage(const char* name)
     fprintf(stderr, "  -U, --unload: unload the code and reload it (for testing only)\n");
     fprintf(
         stderr, "  -R, --reload: reload the code, without unloading it first (for testing only, this should fail)\n");
+}
+
+typedef struct _map_entry
+{
+    struct bpf_map_def map_definition;
+    const char* map_name;
+    union
+    {
+        uint8_t* array;
+    };
+} map_entry_t;
+
+static map_entry_t* _map_entries = NULL;
+static int _map_entries_count = 0;
+static int _map_entries_capacity = 0;
+
+uint64_t
+map_relocation(void* user_context, const uint8_t* map_data, uint64_t map_data_size, const char* symbol_name)
+{
+    struct bpf_map_def map_definition = *(struct bpf_map_def*)map_data;
+    (void)user_context; // unused
+
+    if (map_data_size < sizeof(struct bpf_map_def)) {
+        fprintf(stderr, "Invalid map size: %d\n", (int)map_data_size);
+        return 0;
+    }
+
+    if (map_definition.type != BPF_MAP_TYPE_ARRAY) {
+        fprintf(stderr, "Unsupported map type %d\n", map_definition.type);
+        return 0;
+    }
+
+    if (map_definition.key_size != sizeof(uint32_t)) {
+        fprintf(stderr, "Unsupported key size %d\n", map_definition.key_size);
+        return 0;
+    }
+
+    for (int index = 0; index < _map_entries_count; index++) {
+        if (strcmp(_map_entries[index].map_name, symbol_name) == 0) {
+            return (uint64_t)&_map_entries[index];
+        }
+    }
+
+    if (_map_entries_count == _map_entries_capacity) {
+        _map_entries_capacity = _map_entries_capacity ? _map_entries_capacity * 2 : 4;
+        _map_entries = realloc(_map_entries, _map_entries_capacity * sizeof(map_entry_t));
+    }
+
+    _map_entries[_map_entries_count].map_definition = map_definition;
+    _map_entries[_map_entries_count].map_name = strdup(symbol_name);
+    _map_entries[_map_entries_count].array = calloc(map_definition.max_entries, map_definition.value_size);
+
+    return (uint64_t)&_map_entries[_map_entries_count++];
+}
+
+bool
+bounds_check_function(void* user_context, uint64_t addr, uint64_t size)
+{
+    (void)user_context;
+    for (int index = 0; index < _map_entries_count; index++) {
+        if (addr >= (uint64_t)_map_entries[index].array &&
+            addr + size <= (uint64_t)_map_entries[index].array + _map_entries[index].map_definition.max_entries *
+                                                                     _map_entries[index].map_definition.value_size) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int
@@ -135,6 +207,9 @@ main(int argc, char** argv)
         fprintf(stderr, "Failed to create VM\n");
         return 1;
     }
+
+    ubpf_register_data_relocation(vm, NULL, map_relocation);
+    ubpf_register_data_bounds_check(vm, NULL, bounds_check_function);
 
     if (ubpf_set_pointer_secret(vm, secret) != 0) {
         fprintf(stderr, "Failed to set pointer secret\n");
@@ -316,6 +391,63 @@ unwind(uint64_t i)
     return i;
 }
 
+static void*
+bpf_map_lookup_elem_impl(struct bpf_map* map, const void* key)
+{
+    map_entry_t* map_entry = (map_entry_t*)map;
+    if (map_entry->map_definition.type == BPF_MAP_TYPE_ARRAY) {
+        uint32_t index = *(uint32_t*)key;
+        if (index >= map_entry->map_definition.max_entries) {
+            return NULL;
+        }
+        return map_entry->array + index * map_entry->map_definition.value_size;
+    } else {
+        fprintf(stderr, "bpf_map_lookup_elem not implemented for this map type.\n");
+        exit(1);
+    }
+    return NULL;
+}
+
+static int
+bpf_map_update_elem_impl(struct bpf_map* map, const void* key, const void* value, uint64_t flags)
+{
+    map_entry_t* map_entry = (map_entry_t*)map;
+    (void)flags; // unused
+    if (map_entry->map_definition.type == BPF_MAP_TYPE_ARRAY) {
+        uint32_t index = *(uint32_t*)key;
+        if (index >= map_entry->map_definition.max_entries) {
+            return -1;
+        }
+        memcpy(
+            map_entry->array + index * map_entry->map_definition.value_size,
+            value,
+            map_entry->map_definition.value_size);
+        return 0;
+    } else {
+        fprintf(stderr, "bpf_map_update_elem not implemented for this map type.\n");
+        exit(1);
+    }
+    return 0;
+}
+
+static int
+bpf_map_delete_elem_impl(struct bpf_map* map, const void* key)
+{
+    map_entry_t* map_entry = (map_entry_t*)map;
+    if (map_entry->map_definition.type == BPF_MAP_TYPE_ARRAY) {
+        uint32_t index = *(uint32_t*)key;
+        if (index >= map_entry->map_definition.max_entries) {
+            return -1;
+        }
+        memset(
+            map_entry->array + index * map_entry->map_definition.value_size, 0, map_entry->map_definition.value_size);
+        return 0;
+    } else {
+        fprintf(stderr, "bpf_map_delete_elem not implemented for this map type.\n");
+        exit(1);
+    }
+}
+
 static void
 register_functions(struct ubpf_vm* vm)
 {
@@ -326,4 +458,7 @@ register_functions(struct ubpf_vm* vm)
     ubpf_register(vm, 4, "strcmp_ext", strcmp);
     ubpf_register(vm, 5, "unwind", unwind);
     ubpf_set_unwind_function_index(vm, 5);
+    ubpf_register(vm, (unsigned int)(uintptr_t)bpf_map_lookup_elem, "bpf_map_lookup_elem", bpf_map_lookup_elem_impl);
+    ubpf_register(vm, (unsigned int)(uintptr_t)bpf_map_update_elem, "bpf_map_update_elem", bpf_map_update_elem_impl);
+    ubpf_register(vm, (unsigned int)(uintptr_t)bpf_map_delete_elem, "bpf_map_delete_elem", bpf_map_delete_elem_impl);
 }

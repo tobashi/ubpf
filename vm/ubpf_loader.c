@@ -1,3 +1,6 @@
+// Copyright (c) 2015 Big Switch Networks, Inc
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * Copyright 2015 Big Switch Networks, Inc
  *
@@ -193,11 +196,6 @@ ubpf_load_elf(struct ubpf_vm* vm, const void* elf, size_t elf_size, char** errms
             Elf64_Rel r;
             memcpy(&r, rs + j, sizeof(Elf64_Rel));
 
-            if (ELF64_R_TYPE(r.r_info) != 2) {
-                *errmsg = ubpf_error("bad relocation type %u", ELF64_R_TYPE(r.r_info));
-                goto error;
-            }
-
             uint32_t sym_idx = ELF64_R_SYM(r.r_info);
             if (sym_idx >= num_syms) {
                 *errmsg = ubpf_error("bad symbol index");
@@ -220,13 +218,63 @@ ubpf_load_elf(struct ubpf_vm* vm, const void* elf, size_t elf_size, char** errms
                 goto error;
             }
 
-            unsigned int imm = ubpf_lookup_registered_function(vm, sym_name);
-            if (imm == -1) {
-                *errmsg = ubpf_error("function '%s' not found", sym_name);
-                goto error;
-            }
+            switch (ELF64_R_TYPE(r.r_info)) {
+            // Perform map relocation.
+            case R_BPF_64_64: {
+                if (sym.st_shndx > ehdr->e_shnum) {
+                    *errmsg = ubpf_error("bad section index");
+                    goto error;
+                }
+                struct section* map = &sections[sym.st_shndx];
+                if (map->shdr->sh_type != SHT_PROGBITS || map->shdr->sh_flags != (SHF_ALLOC | SHF_WRITE)) {
+                    *errmsg = ubpf_error("bad map section");
+                    goto error;
+                }
 
-            *(uint32_t*)(text_copy + r.r_offset + 4) = imm;
+                if (sym.st_size + sym.st_value > map->size) {
+                    *errmsg = ubpf_error("bad map size");
+                    goto error;
+                }
+
+                struct ebpf_inst* inst = (struct ebpf_inst*)(text_copy + r.r_offset);
+                struct ebpf_inst* inst2 = (struct ebpf_inst*)(text_copy + r.r_offset + sizeof(struct ebpf_inst));
+                if (inst->opcode != EBPF_OP_LDDW) {
+                    *errmsg = ubpf_error("bad relocation instruction");
+                    goto error;
+                }
+                if (r.r_offset + sizeof(struct ebpf_inst) * 2 > text->size) {
+                    *errmsg = ubpf_error("bad relocation offset");
+                    goto error;
+                }
+
+                if (!vm->data_relocation_function) {
+                    *errmsg = ubpf_error("map relocation function not set");
+                    goto error;
+                }
+
+                const uint8_t* data = sym.st_value + map->data;
+                uint64_t size = sym.st_size;
+                uint64_t imm = vm->data_relocation_function(vm->data_relocation_user_data, data, size, sym_name);
+                inst->imm = (uint32_t)imm;
+                inst2->imm = (uint32_t)(imm >> 32);
+                break;
+            }
+            // Perform function relocation.
+            case 2: {
+                unsigned int imm = ubpf_lookup_registered_function(vm, sym_name);
+                if (imm == -1) {
+                    *errmsg = ubpf_error("function '%s' not found", sym_name);
+                    goto error;
+                }
+
+                *(uint32_t*)(text_copy + r.r_offset + 4) = imm;
+                break;
+            }
+            default:
+                *errmsg = ubpf_error("bad relocation type %u", ELF64_R_TYPE(r.r_info));
+                goto error;
+                break;
+            }
         }
     }
 
