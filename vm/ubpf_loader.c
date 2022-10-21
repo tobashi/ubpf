@@ -220,7 +220,7 @@ ubpf_load_elf(struct ubpf_vm* vm, const void* elf, size_t elf_size, char** errms
 
             switch (ELF64_R_TYPE(r.r_info)) {
             // Perform map relocation.
-            case R_BPF_64_64: {
+            case 1: {
                 if (sym.st_shndx > ehdr->e_shnum) {
                     *errmsg = ubpf_error("bad section index");
                     goto error;
