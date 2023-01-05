@@ -10,10 +10,10 @@
 project("ubpf")
 cmake_minimum_required(VERSION 3.16)
 
-if (UBPF_INSTALL_GIT_HOOKS)
-  # Install Git pre-commit hook
-  file(COPY scripts/pre-commit scripts/commit-msg
-       DESTINATION "${PROJECT_SOURCE_DIR}/.git/hooks")
+if (UBPF_INSTALL_GIT_HOOKS AND EXISTS "${PROJECT_SOURCE_DIR}/.git/hooks")
+    # Install Git pre-commit hook
+    file(COPY scripts/pre-commit scripts/commit-msg
+        DESTINATION "${PROJECT_SOURCE_DIR}/.git/hooks")
 endif()
 
 include("cmake/platform.cmake")
