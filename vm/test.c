@@ -83,7 +83,8 @@ map_relocation(
     uint64_t symbol_offset)
 {
     struct bpf_map_def map_definition = *(struct bpf_map_def*)map_data;
-    (void)user_context; // unused
+    (void)user_context;  // unused
+    (void)symbol_offset; // unused
 
     if (map_data_size < sizeof(struct bpf_map_def)) {
         fprintf(stderr, "Invalid map size: %d\n", (int)map_data_size);
