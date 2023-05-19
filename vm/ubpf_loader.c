@@ -38,6 +38,14 @@
 #define EM_BPF 247
 #endif
 
+#ifndef R_BPF_64_64
+#define R_BPF_64_64 1
+#endif
+
+#ifndef R_BPF_64_32
+#define R_BPF_64_32 2
+#endif
+
 #if defined(UBPF_HAS_ELF_H)
 
 struct bounds
@@ -220,7 +228,7 @@ ubpf_load_elf(struct ubpf_vm* vm, const void* elf, size_t elf_size, char** errms
 
             switch (ELF64_R_TYPE(r.r_info)) {
             // Perform map relocation.
-            case 1: {
+            case R_BPF_64_64: {
                 if (sym.st_shndx > ehdr->e_shnum) {
                     *errmsg = ubpf_error("bad section index");
                     goto error;
@@ -254,13 +262,16 @@ ubpf_load_elf(struct ubpf_vm* vm, const void* elf, size_t elf_size, char** errms
 
                 const uint8_t* data = sym.st_value + map->data;
                 uint64_t size = sym.st_size;
-                uint64_t imm = vm->data_relocation_function(vm->data_relocation_user_data, data, size, sym_name);
+                uint64_t imm =
+                    vm->data_relocation_function(vm->data_relocation_user_data, data, size, sym_name, sym.st_value);
                 inst->imm = (uint32_t)imm;
                 inst2->imm = (uint32_t)(imm >> 32);
                 break;
             }
             // Perform function relocation.
-            case 2: {
+            // Note: This is a uBPF specific relocation type and is not part of the ELF specification.
+            // It is used to perform resolution from helper function name to helper function id.
+            case R_BPF_64_32: {
                 unsigned int imm = ubpf_lookup_registered_function(vm, sym_name);
                 if (imm == -1) {
                     *errmsg = ubpf_error("function '%s' not found", sym_name);

@@ -75,7 +75,12 @@ static int _map_entries_count = 0;
 static int _map_entries_capacity = 0;
 
 uint64_t
-map_relocation(void* user_context, const uint8_t* map_data, uint64_t map_data_size, const char* symbol_name)
+map_relocation(
+    void* user_context,
+    const uint8_t* map_data,
+    uint64_t map_data_size,
+    const char* symbol_name,
+    uint64_t symbol_offset)
 {
     struct bpf_map_def map_definition = *(struct bpf_map_def*)map_data;
     (void)user_context; // unused
